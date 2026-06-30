@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { parse as parseOpentypeFont } from "opentype.js";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { ButtonGroup } from "@/components/ui/button-group";
@@ -11,11 +12,68 @@ import {
 } from "@/components/ui/resizable";
 
 const CHAR_SETS = {
-  ascii: " . / - : ;=*?%S3#",
-  symbols: " ∵ ·◦◌◇△◻⁂◎★◆⸗§█",
-  blocks: "  ▘▖░▞▒▛▓█",
+  ascii: " .:-=+*#%@",
+  symbols: " .·◦∘○◇△◻◎⁂◆★▩█",
+  blocks: " ░▏▖▞▚▒▛▓█",
 };
 
+const EXPORT_FONT_SIZE = 16;
+const EXPORT_CELL_WIDTH = EXPORT_FONT_SIZE * 0.6;
+const EXPORT_CELL_HEIGHT = EXPORT_FONT_SIZE;
+
+let monoFontPromise = null;
+function loadMonoFont() {
+  if (!monoFontPromise) {
+    monoFontPromise = fetch("/fonts/GeistMono-Regular.ttf")
+      .then((res) => res.arrayBuffer())
+      .then((buffer) => parseOpentypeFont(buffer));
+  }
+  return monoFontPromise;
+}
+
+// Outlines each glyph once and reuses it via <use> per grid cell, so the
+// SVG has no <text> nodes and renders identically without the font installed.
+async function asciiToSvg(asciiText, cols) {
+  const font = await loadMonoFont();
+  const ascentPx = (font.ascender / font.unitsPerEm) * EXPORT_FONT_SIZE;
+  const lines = asciiText.split("\n").filter((l) => l.length > 0);
+
+  const pathIds = new Map();
+  let defs = "";
+  let uses = "";
+
+  lines.forEach((line, row) => {
+    for (let col = 0; col < line.length; col++) {
+      const ch = line[col];
+      if (ch === " ") continue;
+      let id = pathIds.get(ch);
+      if (id === undefined) {
+        id = `c${pathIds.size}`;
+        pathIds.set(ch, id);
+        const glyphPath = font.getPath(ch, 0, ascentPx, EXPORT_FONT_SIZE);
+        defs += `<path id="${id}" d="${glyphPath.toPathData(2)}"/>`;
+      }
+      const x = (col * EXPORT_CELL_WIDTH).toFixed(2);
+      const y = (row * EXPORT_CELL_HEIGHT).toFixed(2);
+      uses += `<use href="#${id}" x="${x}" y="${y}"/>`;
+    }
+  });
+
+  const width = cols * EXPORT_CELL_WIDTH;
+  const height = lines.length * EXPORT_CELL_HEIGHT;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="#ffffff"><defs>${defs}</defs>${uses}</svg>`;
+}
+
+function downloadSvg(svgMarkup, filename) {
+  const blob = new Blob([svgMarkup], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 function imageToAscii(
   img,
   cols,
@@ -89,6 +147,7 @@ export default function AsciiConverter() {
   const [typeOfChar, setTypeOfChar] = useState("ascii");
   const [fontSize, setFontSize] = useState(12);
   const [imgRatio, setImgRatio] = useState(0);
+  const [isExporting, setIsExporting] = useState(false);
   const imgRef = useRef(null);
   const inputRef = useRef(null);
   const outputRef = useRef(null);
@@ -130,6 +189,17 @@ export default function AsciiConverter() {
     reader.onload = (e) => setImageSrc(e.target.result);
     reader.readAsDataURL(file);
   }, []);
+
+  const handleExportSvg = useCallback(async () => {
+    if (!ascii || isExporting) return;
+    setIsExporting(true);
+    try {
+      const svgMarkup = await asciiToSvg(ascii, cols);
+      downloadSvg(svgMarkup, "ascii-art.svg");
+    } finally {
+      setIsExporting(false);
+    }
+  }, [ascii, cols, isExporting]);
 
   const handleImageLoad = useCallback(() => {
     if (!imgRef.current) return;
@@ -206,7 +276,7 @@ export default function AsciiConverter() {
     >
       {/* Left panel */}
       <ResizablePanel
-        defaultSize="50%"
+        defaultSize="40%"
         className="w-1/2 flex flex-col gap-6 p-8 border-r border-border overflow-hidden bg-background"
       >
         <div>
@@ -358,19 +428,29 @@ export default function AsciiConverter() {
         </div>
 
         {imageSrc && (
-          <Button
-            variant="outline"
-            onClick={reset}
-            className="w-full text-[1.4rem] py-20 hover:cursor-pointer"
-          >
-            Remove image
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={reset}
+              className="flex-1 text-[1.4rem] py-20 hover:cursor-pointer"
+            >
+              Remove image
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleExportSvg}
+              disabled={isExporting}
+              className="flex-1 text-[1.4rem] py-20 hover:cursor-pointer"
+            >
+              {isExporting ? "Exporting..." : "Export SVG"}
+            </Button>
+          </div>
         )}
       </ResizablePanel>
       <ResizableHandle withHandle />
       {/* Right panel */}
       <ResizablePanel
-        defaultSize="50%"
+        defaultSize="60%"
         elementRef={outputRef}
         className="w-1/2 bg-zinc-950 flex items-center justify-center overflow-hidden"
       >
