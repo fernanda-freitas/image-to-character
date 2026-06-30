@@ -178,6 +178,7 @@ export default function AsciiConverter() {
 
   const handleCharSetToggle = useCallback(
     (val) => {
+      console.log(val)
       setTypeOfChar(val);
       if (imgRef.current)
         convert(imgRef.current, cols, brightness, invert, val, edge);
